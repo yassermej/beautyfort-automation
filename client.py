@@ -11,6 +11,7 @@ import requests
 # 3rd party libraries
 from peewee import *
 from lxml import etree
+
 import pandas as pd
 import shopify
 
@@ -24,7 +25,6 @@ SHOPIFY_PASSWORD = SHOPIFY_PASSWORD
 
 # write db file
 base_dir = os.path.dirname(os.path.abspath(__file__))
-print(base_dir)
 db = SqliteDatabase(base_dir+'/app.db')
 
 
@@ -214,6 +214,22 @@ def get_product_image(product_xml):
 
     return requests.get(product_thumbnail).content
 
+def upload_product(api, product, variant):
+    # save image
+    if len(product.images) == 0:
+        # pull product information from beautyfort
+        product_xml = api.search_products(product_type, brand_name, stock_code)
+        image_data = get_product_image(product_xml)
+
+        image = shopify.Image({ 'product_id': product.id })
+        image.attach_image(image_data, filename=product.name.replace(' ', '_'))
+        image.save()
+
+        product.images = [image]
+        variant.image = image
+        product.save()
+
+
 if __name__ == "__main__":
     # Initialize db
     initialize_db()
@@ -224,17 +240,12 @@ if __name__ == "__main__":
     # read xlsx file from shopify
     df = pd.read_excel('./shopify.xlsx', index_col=0)
 
-    run_type = 0
-    if int(run_type) == 0:
-
-        idx = input("Type the row index of excel file: ")
-        selected_idx = int(idx)
-        
-        selected_row = df[selected_idx-1:selected_idx]
-        product_type = selected_row.iloc[0][1]
-        brand_name = selected_row.iloc[0][2]
-        product_name = selected_row.iloc[0][3]
-        stock_code = selected_row.iloc[0][4]
+    idx = 0
+    for index, selected_row in df.iterrows():
+        product_type = selected_row[1]
+        brand_name = selected_row[2]
+        product_name = selected_row[3]
+        stock_code = selected_row[4]
 
         # Create or update product
         res = shopify.Product().find(title=product_name)
@@ -243,59 +254,89 @@ if __name__ == "__main__":
             variants = product.variants
             if len(variants) == 1:
                 variant = variants[0]
-                variant.compare_at_price = selected_row.iloc[0][5]
-                variant.inventory_quantity = selected_row.iloc[0][6]
+                variant.compare_at_price = selected_row[5]
+                variant.inventory_quantity = selected_row[6]
+                variant.sku = product_name.replace(' ', '-')
+                variant.save()
                 product.variants = [variant]
-                # invetory_item = shopify.InventoryItem().find(variant.inventory_item_id)
-                # if len(invetory_item) > 0:
-                #     inventory_item[0].cost = selected_row.iloc[0][9]
-                #     inventory_item[0].save()
+                inventory_item = shopify.InventoryItem().find(variant.inventory_item_id)
+                inventory_item.cost = selected_row[7]
+                inventory_item.country_code_of_origin = 'GB'
+                inventory_item.sku = stock_code
+                inventory_item.tracked = True
+                inventory_item.save()
+
+                inventory_levels = shopify.InventoryLevel().find(inventory_item_ids=variant.inventory_item_id)
+                if len(inventory_levels) > 0:
+                    inventory_levels[0].set(inventory_item_id=variant.inventory_item_id,
+                                        available=str(selected_row[6]),
+                                        location_id=str(inventory_levels[0].location_id))
 
             product.product_type = product_type
-            product.vendor = selected_row.iloc[0][0]
+            product.vendor = selected_row[0]
             product.save()
 
-            if len(product.images) == 0:
-                # pull product information from beautyfort
-                product_xml = api.search_products(product_type, brand_name, stock_code)
-                image_data = get_product_image(product_xml)
+            # save image
+            # if len(product.images) == 0:
+            #     # pull product information from beautyfort
+            #     product_xml = api.search_products(product_type, brand_name, stock_code)
+            #     image_data = get_product_image(product_xml)
 
-                image = shopify.Image({ 'product_id': product.id })
-                image.attach_image(image_data, filename=product_name.replace(' ', '_'))
-                image.save()
+            #     image = shopify.Image({ 'product_id': product.id })
+            #     image.attach_image(image_data, filename=product_name.replace(' ', '_'))
+            #     image.save()
 
-                product.images = [image]
-                variant.image = image
-                product.variants = [variant]
-                product.save()
+            #     product.images = [image]
+            #     variant.image = image
+            #     product.variants = [variant]
+            #     product.save()
             print("Product is updated successfully. Id is {}!  ".format(product.id))
         else:
             # Create product
             product = shopify.Product()
             product.title = product_name
-            product.vendor = selected_row.iloc[0][0]
+            product.vendor = selected_row[0]
             product.product_type = product_type
 
             variant = shopify.Variant()
-            variant.product_id = product.id
-            variant.price = selected_row.iloc[0][7]
-            variant.compare_at_price = selected_row.iloc[0][5]
-            variant.inventory_quantity = selected_row.iloc[0][6]
-
             product.variants =[variant]
+            variant.product_id = product.id
+            # variant.price = selected_row[7]
+            variant.compare_at_price = selected_row[5]
+            variant.inventory_quantity = selected_row[6]
+            variant.sku = product_name.replace(' ', '-')
+            variant.fulfillment_service = 'manual'
+            variant.inventory_management = 'shopify'
             product.save()
+            # variant.save()
 
-            if len(product.images) == 0:
-                # pull product information from beautyfort
-                product_xml = api.search_products(product_type, brand_name, stock_code)
-                image_data = get_product_image(product_xml)
 
-                image = shopify.Image({ 'product_id': product.id })
-                image.attach_image(image_data, filename=product_name.replace(' ', '_'))
-                image.save()
+            variant = product.variants[0]
+            inventory_item = shopify.InventoryItem().find(variant.inventory_item_id)
+            inventory_item.cost = selected_row[7]
+            inventory_item.country_code_of_origin = 'GB'
+            inventory_item.sku = stock_code
+            inventory_item.tracked = True
+            inventory_item.save()
 
-                product.images = [image]
-                variant.image = image
-                product.variants = [variant]
-                product.save()
+            inventory_levels = shopify.InventoryLevel().find(inventory_item_ids=variant.inventory_item_id)
+            if len(inventory_levels) > 0:
+                inventory_levels[0].set(inventory_item_id=variant.inventory_item_id,
+                                    available=str(selected_row[6]),
+                                    location_id=str(inventory_levels[0].location_id))
+
+            # save image
+            # if len(product.images) == 0:
+            #     # pull product information from beautyfort
+            #     product_xml = api.search_products(product_type, brand_name, stock_code)
+            #     image_data = get_product_image(product_xml)
+
+            #     image = shopify.Image({ 'product_id': product.id })
+            #     image.attach_image(image_data, filename=product_name.replace(' ', '_'))
+            #     image.save()
+
+            #     product.images = [image]
+            #     variant.image = image
+            #     product.variants = [variant]
+            #     product.save()
             print("Product is saved successfully. Id is {}!  ".format(product.id))
