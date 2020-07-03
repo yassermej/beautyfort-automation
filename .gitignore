@@ -3,3 +3,4 @@ output.xlsx
 shopify.xlsx
 account.xml
 /__pycache__/
+app.db

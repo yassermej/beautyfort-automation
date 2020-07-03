@@ -1,0 +1,2 @@
+xlsx id: 1, product name: Elemis Life Elixirs Fortitude Bath & Shower Elixir 100ml 
+xlsx id: 2, product name: Acqua di Parma Blu Mediterraneo Cedro di Taormina Shower Gel 200ml 
