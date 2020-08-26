@@ -4,3 +4,5 @@ shopify.xlsx
 account.xml
 /__pycache__/
 app.db
+*.txt
+*.pickle

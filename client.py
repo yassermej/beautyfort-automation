@@ -102,7 +102,10 @@ class BeautyFort:
         return base64_bytes.decode('ascii')
 
     def parse_res_to_xml(self, res):
-        tree = etree.HTML(res.split('<SOAP-ENV:Body>')[1].split('</SOAP-ENV:Body>')[0])
+        tree = None
+        xml_content = res.split('<SOAP-ENV:Body>')
+        if len(xml_content) > 0:
+            tree = etree.HTML(xml_content[1].split('</SOAP-ENV:Body>')[0])
         return tree
 
     def search_products(self, product_type_name, brand_name, stock_code):
@@ -113,9 +116,6 @@ class BeautyFort:
         category_id = ''
         brand_id = ''
         product_type_id = ''
-
-        # for entry in category:
-        #     category_id = entry.uid
 
         for entry in brand:
             brand_id = entry.uid
@@ -149,7 +149,11 @@ class BeautyFort:
         """ % (USERNAME, self.nounce, self.created_at, self.password, brand_id, product_type_id)
 
         headers = {'Content-Type': 'application/xml'}
-        res = requests.post(self.url, data=xml, headers=headers).text
+        try:
+            res = requests.post(self.url, data=xml, headers=headers).text
+        except:
+            time.sleep(5)
+            res = requests.post(self.url, data=xml, headers=headers).text
         return res
 
     def get_account(self):
@@ -213,17 +217,27 @@ class BeautyFort:
 
 def get_product_image(product_xml):
     tree = api.parse_res_to_xml(product_xml)
-    products = tree.xpath("//items//item")
-    product_image = ''
-    product_thumbnail = ''
-    for product in products:
-        name = extract_first(product.xpath(".//name//text()"))
-        if name == product_name:
-            price = extract_first(product.xpath(".//amount//text()"))
-            product_thumbnail = extract_first(product.xpath(".//thumbnailimageurl//text()"))
-            product_image = extract_first(product.xpath(".//highresimageurl//text()"))
+    if tree != None:
+        products = tree.xpath("//items//item")
+        product_image = ''
+        product_thumbnail = ''
+        for product in products:
+            name = extract_first(product.xpath(".//name//text()"))
+            if name == product_name:
+                price = extract_first(product.xpath(".//amount//text()"))
+                product_thumbnail = extract_first(product.xpath(".//thumbnailimageurl//text()"))
+                product_image = extract_first(product.xpath(".//highresimageurl//text()"))
 
-    return requests.get(product_thumbnail).content
+
+        content = None
+        try:
+            content = requests.get(product_thumbnail).content
+        except:
+            time.sleep(5)
+            content = requests.get(product_thumbnail).content
+        return content
+    else:
+        return None
 
 def upload_product(api, product, variant):
     # save image
@@ -245,6 +259,111 @@ def validate_cell(val):
         return ''
     return val
 
+def run_shopify(selected_row, product_name, product_quantity, product_type, is_new_collection, collection_id):
+    res = shopify.Product().find(title=product_name)
+
+    if len(res) > 0:
+        product = res[0]
+        variants = product.variants
+        if len(variants) == 1:
+            variant = variants[0]
+
+            variant.compare_at_price = validate_cell(selected_row[5])
+            variant.sku = product_name.replace(' ', '-')
+            variant.save()
+
+
+            inventory_item = shopify.InventoryItem().find(variant.inventory_item_id)
+            inventory_item.cost = validate_cell(selected_row[7])
+            inventory_item.country_code_of_origin = 'GB'
+            inventory_item.sku = stock_code
+            inventory_item.tracked = True
+            inventory_item.save()
+
+            time.sleep(1)
+
+            inventory_levels = shopify.InventoryLevel().find(inventory_item_ids=variant.inventory_item_id)
+            if len(inventory_levels) > 0:
+                inventory_levels[0].set(inventory_item_id=variant.inventory_item_id,
+                                    available=str(product_quantity),
+                                    location_id=str(inventory_levels[0].location_id))
+
+        product.product_type = product_type
+        product.vendor = validate_cell(selected_row[0])
+
+        if is_new_collection:
+            new_collection = shopify.SmartCollection()
+            new_collection.title = product_type
+            new_collection.published_status = 'any'
+            new_collection.product_id = product.id
+            new_collection.rules = [{ "column": "type", "relation": "equals", "condition": product_type }]
+            new_collection.save()
+
+            collection_titles[product_type] = new_collection.id
+            collection_id = new_collection.id                        
+
+        product.collection_id = collection_id
+        product.save()
+        # save image 
+        #upload_product(api, product, variant)
+
+        print("Product is updated successfully. Id is {}!  ".format(product.id))
+    else:
+        # Create product
+        product = shopify.Product()
+        product.title = product_name
+        product.vendor = validate_cell(selected_row[0])
+        product.product_type = product_type
+
+        variant = shopify.Variant()
+        product.variants =[variant]
+        product.save()
+
+        variant.product_id = product.id
+        # variant.price = selected_row[7]
+        variant.compare_at_price = validate_cell(selected_row[5])
+        variant.sku = product_name.replace(' ', '-')
+        variant.fulfillment_service = 'manual'
+        variant.inventory_management = 'shopify'
+        variant.save()
+
+        time.sleep(1)
+
+
+        variant = product.variants[0]
+        inventory_item = shopify.InventoryItem().find(variant.inventory_item_id)
+        inventory_item.cost = validate_cell(selected_row[7])
+        inventory_item.country_code_of_origin = 'GB'
+        inventory_item.sku = stock_code
+        inventory_item.tracked = True
+        inventory_item.save()
+        time.sleep(1)
+
+        inventory_levels = shopify.InventoryLevel().find(inventory_item_ids=variant.inventory_item_id)
+        if len(inventory_levels) > 0:
+            inventory_levels[0].set(inventory_item_id=variant.inventory_item_id,
+                                available=str(product_quantity),
+                                location_id=str(inventory_levels[0].location_id))
+
+
+        if is_new_collection:
+            new_collection = shopify.SmartCollection()
+            new_collection.title = product_type
+            new_collection.published_status = 'any'
+            new_collection.product_id = product.id
+            new_collection.rules = [{ "column": "type", "relation": "equals", "condition": product_type }]
+            new_collection.save()
+
+            collection_titles[product_type] = new_collection.id
+            collection_id = new_collection.id
+
+        product.collection_id = collection_id
+        product.save()
+
+        # save image 
+        #upload_product(api, product, variant)
+        print("Product is saved successfully. Id is {}!  ".format(product.id))
+
 
 if __name__ == "__main__":
     # Initialize db
@@ -257,113 +376,66 @@ if __name__ == "__main__":
     df = pd.read_excel('./shopify.xlsx', index_col=0)
     now = datetime.now().strftime("%Y-%m-%d")
 
+    collection_titles = dict()
+    collections = shopify.CollectionListing().find(title='')
+    for col in collections:
+        collection_titles[col.title] = col.collection_id
+
     idx = 0
     for index, selected_row in df.iterrows():
-        product_type = validate_cell(selected_row[1])
-        brand_name = validate_cell(selected_row[2])
-        product_name = validate_cell(selected_row[3])
-        stock_code = validate_cell(selected_row[4])
-
-        product_xml = api.search_products(product_type, brand_name, product_name)
-
-        tree = api.parse_res_to_xml(product_xml)
-        products = tree.xpath("//items//item")
-        price = ''
-        product_quantity = '0'
-
-        is_exits = False
-        for product in products:
-            name = extract_first(product.xpath(".//name//text()"))
-            if name == product_name:
-                is_exits = True
-                price = extract_first(product.xpath(".//amount//text()"))
-                stock_code = extract_first(product.xpath(".//stockcode//text()"))
-                product_quantity = extract_first(product.xpath(".//quantityavailable//text()"))
-
-        if is_exits == False:
-            with open('beautyfort_error_{}.txt'.format(now), 'a') as f:
-                f.write("xlsx id: {}, product name: {} \n".format(idx, product_name))
+        if idx > 4:
+            break
         else:
-            print("product_name: {}, inventory_quantity: {}".format(product_name, product_quantity))
-            # Create or update product
             try:
-                res = shopify.Product().find(title=product_name)
+                product_type = validate_cell(selected_row[1])
+                brand_name = validate_cell(selected_row[2])
+                product_name = validate_cell(selected_row[3])
+                stock_code = validate_cell(selected_row[4])
 
-                if len(res) > 0:
-                    product = res[0]
-                    variants = product.variants
-                    if len(variants) == 1:
-                        variant = variants[0]
+                product_xml = api.search_products(product_type, brand_name, product_name)
+                time.sleep(2)
 
-                        variant.compare_at_price = validate_cell(selected_row[5])
-                        variant.sku = product_name.replace(' ', '-')
-                        variant.save()
-
-
-                        inventory_item = shopify.InventoryItem().find(variant.inventory_item_id)
-                        inventory_item.cost = validate_cell(selected_row[7])
-                        inventory_item.country_code_of_origin = 'GB'
-                        inventory_item.sku = stock_code
-                        inventory_item.tracked = True
-                        inventory_item.save()
-
-                        time.sleep(1)
-
-                        inventory_levels = shopify.InventoryLevel().find(inventory_item_ids=variant.inventory_item_id)
-                        if len(inventory_levels) > 0:
-                            inventory_levels[0].set(inventory_item_id=variant.inventory_item_id,
-                                                available=str(product_quantity),
-                                                location_id=str(inventory_levels[0].location_id))
-
-                    product.product_type = product_type
-                    product.vendor = validate_cell(selected_row[0])
-                    product.save()
-
-                    # save image 
-                    #upload_product(api, product, variant)
-
-                    print("Product is updated successfully. Id is {}!  ".format(product.id))
-                else:
-                    # Create product
-                    product = shopify.Product()
-                    product.title = product_name
-                    product.vendor = validate_cell(selected_row[0])
-                    product.product_type = product_type
-
-                    variant = shopify.Variant()
-                    product.variants =[variant]
-                    product.save()
-
-                    variant.product_id = product.id
-                    # variant.price = selected_row[7]
-                    variant.compare_at_price = validate_cell(selected_row[5])
-                    variant.sku = product_name.replace(' ', '-')
-                    variant.fulfillment_service = 'manual'
-                    variant.inventory_management = 'shopify'
-                    variant.save()
-
-                    time.sleep(1)
+                tree = api.parse_res_to_xml(product_xml)
+                if tree != None:
+                    products = tree.xpath("//items//item")
+                    price = ''
+                    product_quantity = '0'
 
 
-                    variant = product.variants[0]
-                    inventory_item = shopify.InventoryItem().find(variant.inventory_item_id)
-                    inventory_item.cost = validate_cell(selected_row[7])
-                    inventory_item.country_code_of_origin = 'GB'
-                    inventory_item.sku = stock_code
-                    inventory_item.tracked = True
-                    inventory_item.save()
+                    is_exits = False
+                    for product in products:
+                        name = extract_first(product.xpath(".//name//text()"))
+                        if name == product_name:
+                            is_exits = True
+                            price = extract_first(product.xpath(".//amount//text()"))
+                            stock_code = extract_first(product.xpath(".//stockcode//text()"))
+                            product_quantity = extract_first(product.xpath(".//quantityavailable//text()"))
 
-                    inventory_levels = shopify.InventoryLevel().find(inventory_item_ids=variant.inventory_item_id)
-                    if len(inventory_levels) > 0:
-                        inventory_levels[0].set(inventory_item_id=variant.inventory_item_id,
-                                            available=str(product_quantity),
-                                            location_id=str(inventory_levels[0].location_id))
+                    if is_exits == False:
+                        with open('beautyfort_error_{}.txt'.format(now), 'a') as f:
+                            f.write("xlsx id: {}, product name: {} \n".format(idx, product_name))
+                    else:
+                        # create collection if it doesn't exist
+                        collection_id = None
+                        is_new_collection = False
+                        try:
+                            collection_id = collection_titles[product_type]
+                        except:
+                            is_new_collection = True
 
-                    # save image 
-                    #upload_product(api, product, variant)
-                    print("Product is saved successfully. Id is {}!  ".format(product.id))
-
+                        print("product_name: {}, inventory_quantity: {}, new_collection: {}, new_title: {}".format(product_name, product_quantity, is_new_collection, product_type))
+                        # Create or update product
+                        # try:
+                        try:
+                            run_shopify(selected_row, product_name, product_quantity, product_type, is_new_collection, collection_id)
+                        except Exception as ee:
+                            print("reconnect shopify : {}".format(ee))
+                            time.sleep(5)
+                            try:
+                                run_shopify(selected_row, product_name, product_quantity, product_type, is_new_collection, collection_id)
+                            except Exception as pp:
+                                print("double connect shopify : {}".format(pp))
+                                pass
             except Exception as ee:
-                print("######## Error {} #######: {}".format(product_name, str(ee)))
-                pdb.set_trace()
+                print("Reconnect: ".format(str(ee)))
         idx = idx + 1
